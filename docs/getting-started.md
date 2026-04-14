@@ -106,10 +106,9 @@ uv run pytest -m unit -q
 
 ## CLI 命令速查
 
-| 命令                          | 用途               |
-| ----------------------------- | ------------------ |
-| `taac-train`                  | 训练实验包         |
-| `taac-evaluate`               | 评估 checkpoint    |
-| `taac-search`                 | Optuna 超参数搜索  |
-| `taac-plot-model-performance` | 生成性能对比图     |
-| `taac-clean-pycache`          | 清理 `__pycache__` |
+| 命令                          | 用途              |
+| ----------------------------- | ----------------- |
+| `taac-train`                  | 训练实验包        |
+| `taac-evaluate`               | 评估 checkpoint   |
+| `taac-search`                 | Optuna 超参数搜索 |
+| `taac-plot-model-performance` | 生成性能对比图    |
