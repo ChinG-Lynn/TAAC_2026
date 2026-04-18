@@ -1,3 +1,7 @@
+---
+icon: lucide/flask-conical
+---
+
 # UniRec
 
 **多阶段融合**
@@ -12,10 +16,19 @@ UniRec 强调 unified tokenization、混合 attention mask 和 scaling law 探�
 - Embedding 维度 128
 - **feature_cross_layers = 1**：特征交叉层
 - **sequence_layers = 1**（通过 static_layers=3 配置）：序列建模层
-- **fusion_layers = 1**：融合层
+- **fusion_layers = 1**：融合层（Attention Truncation）
 - 2 个 memory slots
 - 8 个行为分段
 - Pairwise ranking loss（weight=0.25）
+
+## 工程优化（2026-04-10 同步上游）
+
+- **Block Attention Residuals 重写**：逐层 pseudo-query（初始化为零）+ last-token summary O(N·D)，等效 ~1.25x 计算优势
+- **注意力 mask 缓存**：按 (seq_len, n_feature_tokens, n_special_tokens, global_window, local_window, device) 缓存，参数相同时只构建一次
+- **Semi-Local Attention**：global_window=128, local_window=128
+- **SiLU Gated Attention**：去除冗余归一化，与 HSTU 2.0 对齐
+- **MoT CUDA stream 并行**：多分支独立 Transducer 在 GPU 上并行执行
+- **Muon 优化器**：Linear 权重 lr=0.02 + Newton-Schulz 正交化，Embedding 走 AdamW
 
 ## 默认配置
 
@@ -29,6 +42,7 @@ UniRec 强调 unified tokenization、混合 attention mask 和 scaling law 探�
 | `feature_cross_layers` | 1    |
 | `static_layers`        | 3    |
 | `fusion_layers`        | 1    |
+| `recent_seq_len`       | 32   |
 | `epochs`               | 10   |
 | `batch_size`           | 64   |
 | `learning_rate`        | 1e-3 |

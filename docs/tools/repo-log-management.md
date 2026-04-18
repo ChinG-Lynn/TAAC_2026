@@ -1,3 +1,7 @@
+---
+icon: lucide/wrench
+---
+
 # 仓库日志管理
 
 ## 目标
@@ -77,7 +81,7 @@ uv run taac-clean-github-logs --repo Puiching-Memory/TAAC_2026 --pages-only --ex
 脚本结束时会输出 4 行摘要：
 
 ```text
-repo=Xxx/TAAC_2026
+repo=Puiching-Memory/TAAC_2026
 mode=dry-run
 actions=listed:5,targeted:0,deleted:0,failed:0
 pages=listed:3,targeted:0,deleted:0,failed:0
