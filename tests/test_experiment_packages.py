@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from taac2026.infrastructure.experiments.loader import load_experiment_package
+from taac2026.infrastructure.io import datasets as datasets_io
 from taac2026.infrastructure.io.datasets import iter_dataset_rows, resolve_parquet_dataset_path
 from taac2026.infrastructure.nn.defaults import resolve_experiment_builders
 from tests.support import TestWorkspace, create_test_workspace, prepare_experiment
@@ -327,5 +328,29 @@ def test_iter_dataset_rows_missing_cache_root_downloads_from_hf(monkeypatch: pyt
         "path": "TAAC2026/data_sample_1000",
         "split": "train",
         "cache_dir": str(dataset_root.parent),
+        "data_files": None,
+    }
+
+
+def test_iter_dataset_rows_hf_identifier_uses_project_data_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, str | None] = {}
+
+    def fake_load_dataset(path: str, *, split: str, cache_dir: str | None = None, data_files: str | None = None):
+        captured["path"] = path
+        captured["split"] = split
+        captured["cache_dir"] = cache_dir
+        captured["data_files"] = data_files
+        return [{"ok": True}]
+
+    monkeypatch.setattr("datasets.load_dataset", fake_load_dataset)
+    monkeypatch.setattr(datasets_io, "DEFAULT_HF_DATA_CACHE_DIR", tmp_path / "data")
+
+    rows = iter_dataset_rows("TAAC2026/data_sample_1000")
+
+    assert rows == [{"ok": True}]
+    assert captured == {
+        "path": "TAAC2026/data_sample_1000",
+        "split": "train",
+        "cache_dir": str(tmp_path / "data"),
         "data_files": None,
     }

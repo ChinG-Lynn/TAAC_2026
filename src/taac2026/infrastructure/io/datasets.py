@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 
 PREFERRED_PARQUET_NAME = "demo_1000.parquet"
+DEFAULT_HF_DATA_CACHE_DIR = Path(__file__).resolve().parents[4] / "data"
+HF_DATASET_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][\\w.-]*/[A-Za-z0-9][\\w.-]*$")
 
 
 def _read_ref_revision(ref_path: Path) -> str | None:
@@ -83,6 +86,10 @@ def _infer_hf_dataset_name_from_cache_root(dataset_path: Path) -> tuple[str, str
     return f"{owner}/{repo_name}", str(dataset_path.parent)
 
 
+def _is_hf_dataset_identifier(dataset_path: str) -> bool:
+    return bool(HF_DATASET_IDENTIFIER_RE.fullmatch(dataset_path))
+
+
 def resolve_parquet_dataset_path(dataset_path: str | Path) -> Path:
     path = Path(dataset_path).expanduser()
     if path.is_file():
@@ -111,7 +118,8 @@ def iter_dataset_rows(dataset_path: str | Path) -> Iterable[dict[str, Any]]:
     """
     from datasets import load_dataset
 
-    path = Path(dataset_path).expanduser()
+    dataset_ref = str(dataset_path).strip()
+    path = Path(dataset_ref).expanduser()
 
     if path.is_file():
         return load_dataset("parquet", data_files=str(path), split="train")
@@ -125,7 +133,10 @@ def iter_dataset_rows(dataset_path: str | Path) -> Iterable[dict[str, Any]]:
         dataset_name, cache_dir = inferred_dataset
         return load_dataset(dataset_name, split="train", cache_dir=cache_dir)
 
-    return load_dataset(str(dataset_path), split="train")
+    if _is_hf_dataset_identifier(dataset_ref):
+        return load_dataset(dataset_ref, split="train", cache_dir=str(DEFAULT_HF_DATA_CACHE_DIR))
+
+    return load_dataset(dataset_ref, split="train")
 
 
 __all__ = ["iter_dataset_rows", "resolve_parquet_dataset_path"]

@@ -143,3 +143,30 @@ def test_parse_train_args_accepts_dataset_path_override() -> None:
     )
 
     assert args.dataset_path == "/tmp/online-data"
+
+
+def test_parse_train_args_accepts_dataset_identifier_override() -> None:
+    args = parse_train_args(
+        [
+            "--experiment",
+            "config/baseline",
+            "--dataset",
+            "TAAC2026/data_sample_1000",
+        ]
+    )
+
+    assert args.dataset == "TAAC2026/data_sample_1000"
+
+
+def test_parse_train_args_rejects_dataset_and_dataset_path_together() -> None:
+    with pytest.raises(SystemExit):
+        parse_train_args(
+            [
+                "--experiment",
+                "config/baseline",
+                "--dataset",
+                "TAAC2026/data_sample_1000",
+                "--dataset-path",
+                "/tmp/online-data",
+            ]
+        )
