@@ -4,48 +4,47 @@ icon: lucide/gauge
 
 # 性能基准
 
-本页展示仓库 benchmark 套件生成的 ECharts 图表。图表源数据来自两类产物：
+数据管道吞吐量基准测试结果。
 
-- `pytest-benchmark` 导出的运行结果
-- `outputs/performance/` 下的补充 JSON 统计
+## 当前状态
 
-如果当前工作区尚未执行 benchmark，本页会显示占位图；按当前环境选择 CPU 或 GPU benchmark 的 CLI 入口后，再运行报告命令即可刷新：
+基准测试图表已生成（`docs/assets/figures/benchmarks/`，6 个 ECharts JSON）。原始数据来自 `tools/benchmark_pcvr_data_pipeline.py`。
+
+测试场景：
+
+| Preset    | 说明                                 |
+| --------- | ------------------------------------ |
+| `none`    | 无增强，纯数据加载                   |
+| `cache`   | 启用 `PCVRMemoryBatchCache`          |
+| `augment` | 启用序列裁剪 + 域 Dropout + 特征掩码 |
+
+## 恢复基准套件时
+
+运行基准测试：
 
 ```bash
-# CPU benchmark slice
-uv run pytest tests/benchmarks/cpu -m benchmark_cpu --benchmark-json=benchmark-result-cpu.json -v
+python tools/benchmark_pcvr_data_pipeline.py \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json \
+  --preset none
 
-# GPU benchmark slice (CLI only)
-uv run pytest tests/benchmarks/gpu -m benchmark_gpu --benchmark-json=benchmark-result.json -v
+python tools/benchmark_pcvr_data_pipeline.py \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json \
+  --preset cache
 
-# 为已生成的 benchmark JSON 刷新图表与验收摘要
-uv run taac-bench-report --input benchmark-result-cpu.json benchmark-result.json --summary-path docs/assets/figures/benchmarks/benchmark_acceptance.json
+python tools/benchmark_pcvr_data_pipeline.py \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json \
+  --preset augment
 ```
 
-除了图表外，`taac-bench-report` 还会生成验收摘要 JSON：
+指标：samples/sec、batch latency (ms)、GPU utilization (%)。
 
-- `assets/figures/benchmarks/benchmark_acceptance.json`
+生成报告图表：
 
-这个摘要会聚合 phase 基准数据，并给出 embedding 吞吐、attention 延迟和量化记录是否满足路线图验收条件。
-
-当命令行没有显式传入统一的 candidate phase 时，摘要会按组件自动解析最近可用的候选 phase：例如 embedding 默认读取 phase-2 记录，attention 默认读取 phase-3 记录，量化记录继续使用 phase-6。
-
-## 组件延迟对比
-
-<div class="echarts" data-src="assets/figures/benchmarks/component_latency.echarts.json"></div>
-
-## Embedding 吞吐趋势
-
-<div class="echarts" data-src="assets/figures/benchmarks/throughput_trend.echarts.json"></div>
-
-## 端到端训练步延迟
-
-<div class="echarts" data-src="assets/figures/benchmarks/e2e_train_step.echarts.json"></div>
-
-## 推理延迟分布
-
-<div class="echarts" data-src="assets/figures/benchmarks/inference_boxplot.echarts.json"></div>
-
-## 量化前后对比
-
-<div class="echarts" data-src="assets/figures/benchmarks/quantization_comparison.echarts.json"></div>
+```bash
+uv run taac-bench-report \
+  --benchmark-dir outputs/benchmarks \
+  --output-dir docs/assets/figures/benchmarks
+```

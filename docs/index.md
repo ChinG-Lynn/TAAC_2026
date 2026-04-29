@@ -4,77 +4,50 @@ icon: lucide/house
 
 # TAAC 2026 Experiment Workspace
 
-**迈向统一序列建模与特征交互的大规模推荐系统**
-
----
-
-## 项目定位
-
-这是一个面向 [TAAC 2026](https://algo.qq.com/#intro) 的实验工作区。我们把共享训练底座、目录式实验包、统一输出产物和回归测试放进同一套工程里，让新实验可以更快接入、训练、评估和复核。
-
-!!! note "声明"
-    本仓库是 TAAC 2026 其中一个参赛队伍的代码仓库，不代表官方。
+腾讯广告算法大赛 2026 的实验工作区。基于 PyTorch 构建，专注于 PCVR（点击后转化率）预测任务。
 
 ## 核心能力
 
-| 能力             | 说明                                                          |
-| ---------------- | ------------------------------------------------------------- |
-| **统一训练框架** | 一条命令完成训练、评估、checkpoint 保存                       |
-| **目录式实验包** | 每个实验包独立管理数据、模型、损失函数，互不干扰              |
-| **线上训练打包** | 将指定实验包压缩成单个 zip，并提供自动解压和训练入口脚本      |
-| **超参数搜索**   | 基于 Optuna，自动检测 GPU 空闲显存并发派发 trial              |
-| **回归测试**     | Unit / Integration / Property 三层测试，CI 自动覆盖率门控     |
-| **论文复现**     | 内置 InterFormer、OneTrans、HyFormer 等已发表工作的可运行实现 |
+- **插件式实验包** -- 每个实验是 `config/` 下的独立目录，包含模型定义、NS 分组和默认配置。新增实验无需修改框架代码。
+- **统一训练/评估/推理入口** -- 通过 `taac-train`、`taac-evaluate`、`taac-search` 等 CLI 命令驱动所有实验。
+- **可组合数据管道** -- 序列裁剪、特征掩码、域 Dropout、Shuffle Buffer 等增强组件可自由组合。
+- **线上打包** -- `taac-package-train` / `taac-package-infer` 生成符合比赛平台要求的 Bundle。
 
 ## 内置实验包
 
-当前共 **10** 个独立实验包，覆盖从基础 baseline 到前沿论文的多种架构：
-
-| 实验包                                          | 架构特点                        | 来源                                                                                                            |
-| ----------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| [Baseline](experiments/baseline.md)             | 最小参考实现，强调可扩展性      | 本仓库                                                                                                          |
-| [CTR Baseline](experiments/ctr-baseline.md)     | DIN 风格注意力                  | [creatorwyx/TAAC2026-CTR-Baseline](https://github.com/creatorwyx/TAAC2026-CTR-Baseline)                         |
-| [DeepContextNet](experiments/deepcontextnet.md) | 上下文感知建模                  | [suyanli220/TAAC-2026-Baseline](https://github.com/suyanli220/TAAC-2026-Baseline-Tencent-Advertisement-Contest) |
-| [Grok](experiments/grok.md)                     | 分段建模 + pairwise 损失        | 本仓库                                                                                                          |
-| [HyFormer](experiments/hyformer.md)             | 多序列分支 + Query Decode/Boost | [论文](https://arxiv.org/abs/2601.12681)                                                                        |
-| [InterFormer](experiments/interformer.md)       | 双向序列-特征交互               | [论文](https://arxiv.org/abs/2411.09852)                                                                        |
-| [OneTrans](experiments/onetrans.md)             | 统一 Tokenizer + 单 Transformer | [论文](https://arxiv.org/abs/2510.26104)                                                                        |
-| [O_o](experiments/oo.md)                        | 简化统一设计                    | [salmon1802/O_o](https://github.com/salmon1802/O_o)                                                             |
-| [UniRec](experiments/unirec.md)                 | 多阶段融合                      | [hojiahao/TAAC2026](https://github.com/hojiahao/TAAC2026)                                                       |
-| [UniScaleFormer](experiments/uniscaleformer.md) | 缩放序列 + 融合                 | [twx145/Unirec](https://github.com/twx145/Unirec)                                                               |
+| 实验包                                          | 模型           | NS Tokenizer | 亮点                       |
+| ----------------------------------------------- | -------------- | ------------ | -------------------------- |
+| [Baseline](experiments/baseline.md)             | HyFormer       | group        | 基准参考                   |
+| [CTR Baseline](experiments/ctr-baseline.md)     | CTRBaseline    | group        | 低 Dropout                 |
+| [DeepContextNet](experiments/deepcontextnet.md) | DeepContextNet | group        | 3 层 Transformer           |
+| [HyFormer](experiments/hyformer.md)             | HyFormer       | rankmixer    | 多查询解码                 |
+| [InterFormer](experiments/interformer.md)       | InterFormer    | group        | 交叉注意力                 |
+| [OneTrans](experiments/onetrans.md)             | OneTrans       | rankmixer    | 单 Transformer             |
+| [Symbiosis](experiments/symbiosis.md)           | Symbiosis      | rankmixer    | AMP + RoPE + 11 项特性开关 |
+| [UniRec](experiments/unirec.md)                 | UniRec         | rankmixer    | 统一推荐                   |
+| [UniScaleFormer](experiments/uniscaleformer.md) | UniScaleFormer | rankmixer    | 4 层最深栈                 |
 
 ## 技术栈
 
-- **Python** ≥ 3.12
-- **PyTorch** ≥ 2.6
-- **uv** 作为包管理器
-- **Optuna** ≥ 4.4 用于超参数搜索
-- **pytest** + Hypothesis 用于测试
+- Python 3.10 - 3.13 / PyTorch 2.7+ / CUDA 12.6
+- `uv` 包管理器
+- Parquet 列式数据格式
+- Ruff 代码风格 / Pytest 测试 / 70% 覆盖率门限
+- Zensical (MkDocs Material) 文档站
 
 ## 快速预览
 
 ```bash
-# 安装环境
-uv python install 3.13
-uv sync --locked --extra cpu
+# 安装
+uv sync --extra dev --extra pcvr
 
-# 需要 GPU 时，手动选择与你本机 CUDA 对应的 profile
-# 如需切换，再改成 cuda126 / cuda128 / cuda130
-uv sync --locked --extra cuda128
-
-# 训练 baseline
-uv run taac-train --experiment config/baseline
-
-# 打包 baseline 为线上训练 zip
-uv run taac-package-train --experiment config/baseline
+# 训练
+uv run taac-train --experiment config/baseline \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json
 
 # 评估
-uv run taac-evaluate single --experiment config/baseline
-
-# 超参数搜索
-uv run taac-search --experiment config/baseline --trials 20
+uv run taac-evaluate single --experiment config/baseline \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json
 ```
-
-→ 详细步骤见 [快速开始](getting-started.md)
-
-→ 线上训练压缩包格式见 [线上训练打包](guide/online-training-bundle.md)

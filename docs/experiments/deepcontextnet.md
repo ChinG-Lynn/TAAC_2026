@@ -1,57 +1,57 @@
 ---
-icon: lucide/flask-conical
+icon: lucide/layers
 ---
 
 # DeepContextNet
 
-**上下文感知深度建模**
+深层上下文网络，使用 3 层 Transformer 和 Group NS Tokenizer，在 group 类实验包中层数最深。
 
 ## 概述
 
-DeepContextNet 当前在仓库里的实现是标准 Transformer 风格的上下文序列建模实验包，不是框架级 HSTU 实现。它复用了默认数据管道、默认 ranking loss、TorchRec sparse embedding 路径，以及框架默认的混合优化器路由。
+DeepContextNet 通过增加 Transformer 层深度来捕获更丰富的上下文信息。与 Baseline 和 InterFormer 相同使用 Group NS Tokenizer，但多 1 层 Transformer。
 
-## 模型架构
+## 包结构
 
-- 4 层 Transformer，**8 头**注意力
-- Embedding 维度 128
-- Recent sequence length 32（最长）
-- Batch size 32（最小，匹配更大模型的显存需求）
-- 默认走框架 `FeatureSchema` + `TorchRecEmbeddingBagAdapter`
-- 默认数据管道与默认 loss builder 已交给框架层处理
+```
+config/deepcontextnet/
+├── __init__.py
+├── model.py
+└── ns_groups.json
+```
 
-当前仓库实现已经接入框架级 `sparse_features` / `sequence_features` 数据流。DeepContextNet 会从 TorchRec `KeyedJaggedTensor` 重建最近行为上下文，而不再依赖实验包私有的 legacy collate 序列张量。
+## 模型要点
+
+- 3 层 Transformer 编码器（比 baseline 和 interformer 多 1 层）
+- Group NS Tokenizer
+- 深层特征交互
 
 ## 默认配置
 
-| 参数              | 值   |
-| ----------------- | ---- |
-| `embedding_dim`   | 128  |
-| `num_layers`      | 4    |
-| `num_heads`       | 8    |
-| `epochs`          | 10   |
-| `batch_size`      | 32   |
-| `learning_rate`   | 2e-4 |
-| `pairwise_weight` | 0.0  |
+| 参数           | 值                   |
+| -------------- | -------------------- |
+| 模型类         | `PCVRDeepContextNet` |
+| NS Tokenizer   | `group`              |
+| `num_blocks`   | 3                    |
+| `num_heads`    | 4                    |
+| `hidden_mult`  | 4                    |
+| `dropout_rate` | 0.02                 |
 
 ## 快速运行
 
 ```bash
-uv run taac-train --experiment config/deepcontextnet
-uv run taac-evaluate single --experiment config/deepcontextnet
+uv run taac-train \
+  --experiment config/deepcontextnet \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json
 ```
 
-## 当前自定义部分
+## 打包
 
-- `model.py`：保留 DeepContextNet 自己的序列建模块
-- `__init__.py`：`build_data_pipeline=None`、`build_loss_stack=None`、`build_optimizer_component=None`，训练侧完全复用框架默认 builder
-- `utils.py`：仅保留兼容性 helper，不再承载独立优化器实现
-
-## 输出目录
-
-```
-outputs/config/deepcontextnet/
+```bash
+uv run taac-package-train --experiment config/deepcontextnet --output-dir outputs/bundle
 ```
 
 ## 来源
 
-[suyanli220/TAAC-2026-Baseline-Tencent-Advertisement-Contest](https://github.com/suyanli220/TAAC-2026-Baseline-Tencent-Advertisement-Contest)
+- 模型源码：`config/deepcontextnet/model.py`
+- NS Groups：`config/deepcontextnet/ns_groups.json`

@@ -4,89 +4,74 @@ icon: lucide/folder-open
 
 # 实验包总览
 
-## 什么是实验包
+实验包是 TAAC 2026 的核心扩展单元。每个包是 `config/` 下的独立目录，包含模型定义、NS 分组和默认训练配置。新增实验无需修改框架代码。
 
-实验包是 `config/<name>/` 下的一个 Python 目录包，包含数据管道、模型架构和训练工具的完整实现。每个包导出一个 `EXPERIMENT` 对象，框架通过它驱动训练、评估和搜索。
+## 当前实验包
 
-→ 契约详情见 [架构与概念](../architecture.md)
+| 实验包         | 模型类         | Blocks | Dropout | NS Tokenizer      | 亮点                             |
+| -------------- | -------------- | ------ | ------- | ----------------- | -------------------------------- |
+| Baseline       | HyFormer       | 默认   | 默认    | group             | 基准参考                         |
+| CTR Baseline   | CTRBaseline    | 2      | 0.01    | group             | 低 Dropout                       |
+| DeepContextNet | DeepContextNet | 3      | 0.02    | group             | 最深的 group 栈                  |
+| HyFormer       | HyFormer       | 默认   | 默认    | rankmixer (5u/2i) | num_queries=2                    |
+| InterFormer    | InterFormer    | 2      | 0.02    | group             | 交叉注意力                       |
+| OneTrans       | OneTrans       | 2      | 0.02    | rankmixer (5u/2i) | 单 Transformer                   |
+| Symbiosis      | Symbiosis      | 3      | 0.02    | rankmixer (5u/2i) | RoPE + AMP + compile + 11 项开关 |
+| UniRec         | UniRec         | 3      | 0.02    | rankmixer (5u/2i) | 统一推荐                         |
+| UniScaleFormer | UniScaleFormer | 4      | 0.02    | rankmixer (5u/2i) | 最深栈                           |
 
-## 配置对比
+## 包内文件
 
-### 模型配置
+每个实验包目录必须包含三个文件：
 
-| 实验包         | Embedding Dim | Layers | Heads | Segment Count | Memory Slots | Queries | 特征交叉层 |
-| -------------- | :-----------: | :----: | :---: | :-----------: | :----------: | :-----: | :--------: |
-| Baseline       |      96       |   2    |   4   |       0       |      0       |    1    |     0      |
-| CTR Baseline   |      96       |   2    |   4   |       0       |      0       |    1    |     0      |
-| DeepContextNet |      128      |   4    |   8   |       0       |      0       |    1    |     0      |
-| Grok           |      128      |   3    |   4   |       4       |      0       |    1    |     0      |
-| HyFormer       |      128      |   4    |   4   |      13       |      0       |    1    |     0      |
-| InterFormer    |      128      |   3    |   4   |       4       |      4       |    2    |     0      |
-| OneTrans       |      128      |   4    |   4   |       8       |      0       |    0    |     0      |
-| O_o            |      128      |   4    |   4   |       0       |      0       |    0    |     0      |
-| UniRec         |      128      |   4    |   4   |       8       |      2       |    0    |     1      |
-| UniScaleFormer |      128      |   3    |   4   |       8       |      6       |    4    |     1      |
+```
+config/<experiment_name>/
+├── __init__.py         # EXPERIMENT = PCVRExperiment(name, package_dir, model_class_name, train_defaults)
+├── model.py            # 模型类实现
+└── ns_groups.json      # NS 特征分组映射
+```
 
-### 训练配置
+**`__init__.py`** 定义模块级 `EXPERIMENT` 对象：
 
-| 实验包         | Epochs | Batch Size | Learning Rate | Weight Decay | Pairwise Weight |
-| -------------- | :----: | :--------: | :-----------: | :----------: | :-------------: |
-| Baseline       |   5    |     64     |     5e-4      |     1e-4     |       0.0       |
-| CTR Baseline   |   10   |     64     |     5e-4      |     1e-4     |       0.0       |
-| DeepContextNet |   10   |     32     |     2e-4      |     1e-4     |       0.0       |
-| Grok           |   10   |     64     |     3e-4      |     1e-4     |      0.15       |
-| HyFormer       |   10   |     64     |     1e-3      |     1e-4     |       0.0       |
-| InterFormer    |   10   |     64     |     1e-3      |     1e-4     |       0.0       |
-| OneTrans       |   10   |     64     |     1e-3      |     1e-4     |       0.0       |
-| O_o            |   10   |     64     |     1e-3      |     1e-4     |       0.0       |
-| UniRec         |   10   |     64     |     1e-3      |     1e-4     |      0.25       |
-| UniScaleFormer |   10   |     64     |     8e-4      |     0.02     |       0.0       |
+```python
+from taac2026.infrastructure.pcvr.experiment import PCVRExperiment
+from taac2026.infrastructure.pcvr.config import PCVRTrainConfig
 
-### 共享默认值
+EXPERIMENT = PCVRExperiment(
+    name="pcvr_baseline",
+    package_dir=Path(__file__).parent,
+    model_class_name="PCVRHyFormer",
+    train_defaults=PCVRTrainConfig(...),
+)
+```
 
-所有实验包共享以下数据配置：
+**`model.py`** 实现模型类，必须继承 `EmbeddingParameterMixin` 并实现：
 
-- `max_seq_len = 32`
-- `max_feature_tokens = 16`
-- `stream_batch_rows = 256`
-- `label_action_type = 2`（转化作为正样本；`label_type`: 0=曝光, 1=点击, 2=转化）
-- `dense_feature_dim = 16`
-- `vocab_size = 131072`
-- `sequence_names = ("domain_a", "domain_b", "domain_c", "domain_d")`（4 个行为域）
+| 方法                             | 签名                                   | 说明                   |
+| -------------------------------- | -------------------------------------- | ---------------------- |
+| `forward`                        | `(ModelInput) -> logits`               | 前向传播               |
+| `predict`                        | `(ModelInput) -> (logits, embeddings)` | 推理用                 |
+| `get_sparse_params`              | `() -> list[Parameter]`                | 稀疏参数               |
+| `get_dense_params`               | `() -> list[Parameter]`                | 稠密参数               |
+| `reinit_high_cardinality_params` | `() -> None`                           | 重初始化低频 Embedding |
 
-## 按架构分类
-
-### 基础架构
-
-- [**Baseline**](baseline.md) — 最小参考实现，2 层 Transformer，适合快速验证和二次开发
-- [**CTR Baseline**](ctr-baseline.md) — DIN 风格注意力机制，同样轻量
-- [**Grok**](grok.md) — 分段序列建模 + pairwise ranking loss
-
-### 统一 Token 化方向
-
-- [**OneTrans**](onetrans.md) — 统一 Tokenizer 将序列/非序列特征映射到同一 Transformer（WWW 2026）
-- [**O_o**](oo.md) — 简化版统一设计
-
-### 序列-特征交互方向
-
-- [**InterFormer**](interformer.md) — 行为感知交互块，个性化 FFN（CIKM 2025）
-- [**HyFormer**](hyformer.md) — 多序列分支 + Query Decode/Boost 架构
-- [**DeepContextNet**](deepcontextnet.md) — 上下文感知深度建模，标准 Transformer 风格
-
-### 多阶段融合方向
-
-- [**UniRec**](unirec.md) — 特征交叉 + 序列 + 静态层的多阶段融合
-- [**UniScaleFormer**](uniscaleformer.md) — 缩放序列建模 + 特征融合
+**`ns_groups.json`** 定义 NS 特征分组，格式见 [架构与概念](../architecture.md#ns-groups)。
 
 ## 运行任意实验包
 
 ```bash
-# 训练
-uv run taac-train --experiment config/<name>
-
-# 评估
-uv run taac-evaluate single --experiment config/<name>
-
-# 搜索
-uv run taac-search --experiment config/<name> --trials 20
+uv run taac-train --experiment config/<name> \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json
 ```
+
+## 打包任意实验包
+
+```bash
+uv run taac-package-train --experiment config/<name> --output-dir outputs/bundle
+uv run taac-package-infer --experiment config/<name> --output-dir outputs/bundle
+```
+
+## 新增或修改实验包
+
+详见 [新增实验包](../guide/contributing.md)。

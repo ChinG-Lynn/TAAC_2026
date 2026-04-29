@@ -1,51 +1,63 @@
 ---
-icon: lucide/flask-conical
+icon: lucide/activity
 ---
 
 # Baseline
 
-**最小参考实现 / Starter Package**
+基准实验包，使用 HyFormer 模型和默认配置，作为所有实验的参照基线。
 
 ## 概述
 
-Baseline 是本仓库维护的 starter/reference package，强调可扩展性、注释和二次开发体验。推荐作为新实验包开发的起点。
+Baseline 使用 `PCVRHyFormer` 模型类，Group NS Tokenizer，所有超参数取框架默认值。设计目标是提供一个干净的基准参考点。
 
 ## 模型架构
 
-标准 Transformer 编码器，无特殊的序列-特征交互机制：
+HyFormer 是一个多查询混合 Transformer，核心组件：
 
-- 2 层 Transformer，4 头注意力
-- Embedding 维度 96
-- FFN 倍率 2.0
-- 无分段建模、无 memory slots、无特征交叉层
-
-当前仓库实现已经接入框架级 `sparse_features` / `sequence_features` 数据流。Baseline 会从 TorchRec `KeyedJaggedTensor` 重建历史事件序列和多路 sequence grid，而不再依赖实验包私有的 legacy collate 序列张量。
+- **FeatureEmbeddingBank** -- 管理所有特征的 Embedding 表
+- **GroupNSTokenizer** -- 按 NS Groups 将非序列特征分组，每组生成一个 token
+- **SequenceTokenizer** -- 将序列特征编码为 token 序列
+- **MultiSeqHyFormerBlock** -- 序列演化 + 查询解码 + 查询增强
+- **CrossAttention** -- 查询向量与序列 token 的交叉注意力
+- **RankMixerBlock** -- Token 混合 + FFN
 
 ## 默认配置
 
-| 参数              | 值   |
-| ----------------- | ---- |
-| `embedding_dim`   | 96   |
-| `num_layers`      | 2    |
-| `num_heads`       | 4    |
-| `epochs`          | 5    |
-| `batch_size`      | 64   |
-| `learning_rate`   | 5e-4 |
-| `pairwise_weight` | 0.0  |
+| 参数                 | 值             |
+| -------------------- | -------------- |
+| 模型类               | `PCVRHyFormer` |
+| NS Tokenizer         | `group`        |
+| `emb_skip_threshold` | 1,000,000      |
+| `num_blocks`         | 2（默认）      |
+| `num_heads`          | 4（默认）      |
+| `dropout_rate`       | 0.01（默认）   |
 
 ## 快速运行
 
 ```bash
-uv run taac-train --experiment config/baseline
-uv run taac-evaluate single --experiment config/baseline
+uv run taac-train \
+  --experiment config/baseline \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json
 ```
 
 ## 输出目录
 
+训练产物保存在 `outputs/pcvr_baseline-<slug>/`：
+
 ```
-outputs/config/baseline/
+outputs/pcvr_baseline-<slug>/
+├── global_step<N>.{params}.best_model/
+│   ├── model.pt
+│   ├── schema.json
+│   ├── ns_groups.json
+│   └── train_config.json
+└── events.out.tfevents.*    # TensorBoard 日志
 ```
 
 ## 来源
 
-本仓库原创。
+- 模型源码：`config/baseline/model.py`
+- NS Groups：`config/baseline/ns_groups.json`
+- 训练配置：`config/baseline/__init__.py`
+- HyFormer 论文解读：[papers/hyformer.md](../papers/hyformer.md)

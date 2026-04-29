@@ -2,207 +2,152 @@
 icon: lucide/git-branch-plus
 ---
 
-# 开发指南：新增实验包
+# 新增实验包
 
-## 当前约定
+如何创建和验证一个新的实验包。
 
-新增实验包时，默认优先复用框架层的共享实现。只有当默认 builder 不满足需求时，才额外创建 `data.py` 或 `utils.py`。
-
-### 推荐目录结构
-
-最小接入通常只需要两个文件：
+## 最小目录
 
 ```
-config/my_experiment/
-├── __init__.py    # 导出 EXPERIMENT
-└── model.py       # build_model_component（模型架构）
-```
-
-当你需要覆盖默认行为时，再按需增加：
-
-```
-config/my_experiment/
+config/<experiment_name>/
 ├── __init__.py
 ├── model.py
-├── data.py        # 仅在默认数据管道不够用时新增
-└── utils.py       # 仅在默认 loss / optimizer 不够用时新增
+└── ns_groups.json
 ```
 
-## 第 1 步：创建 `__init__.py`
+三个文件缺一不可。`discover_experiment_paths()` 会扫描 `config/` 下所有包含这三个文件的目录。
+
+## __init__.py
+
+定义模块级 `EXPERIMENT` 对象：
 
 ```python
-from __future__ import annotations
-
 from pathlib import Path
+from taac2026.infrastructure.pcvr.experiment import PCVRExperiment
+from taac2026.infrastructure.pcvr.config import PCVRTrainConfig, PCVRModelConfig
 
-from taac2026.domain.config import DataConfig, ModelConfig, TrainConfig
-from taac2026.domain.experiment import ExperimentSpec
-from taac2026.domain.features import build_default_feature_schema
-
-from .model import build_model_component
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "config" / "my_experiment"
-
-EXPERIMENT = ExperimentSpec(
-    name="my_experiment",
-    data=DataConfig(
-        max_seq_len=32,
-        max_feature_tokens=16,
-        max_event_features=4,
-        stream_batch_rows=256,
-        val_ratio=0.2,
-        label_action_type=2,
-        dense_feature_dim=16,
+EXPERIMENT = PCVRExperiment(
+    name="pcvr_my_experiment",
+    package_dir=Path(__file__).parent,
+    model_class_name="MyModel",
+    train_defaults=PCVRTrainConfig(
+        model=PCVRModelConfig(
+            num_blocks=3,
+            num_heads=4,
+            dropout_rate=0.02,
+        ),
+        ns=PCVRNSConfig(
+            tokenizer_type="rankmixer",
+            user_ns_tokens=5,
+            item_ns_tokens=2,
+        ),
     ),
-    model=ModelConfig(
-        name="my_experiment",
-        vocab_size=131072,
-        embedding_dim=128,
-        hidden_dim=128,
-        dropout=0.1,
-        num_layers=4,
-        num_heads=4,
-        recent_seq_len=32,
-        memory_slots=2,
-        ffn_multiplier=4.0,
-        feature_cross_layers=1,
-        sequence_layers=1,
-        static_layers=1,
-        query_decoder_layers=0,
-        fusion_layers=1,
-        num_queries=0,
-        head_hidden_dim=128,
-        segment_count=4,
-    ),
-    train=TrainConfig(
-        seed=7,
-        epochs=10,
-        batch_size=64,
-        eval_batch_size=64,
-        num_workers=0,
-        output_dir=str(DEFAULT_OUTPUT_DIR),
-        learning_rate=1.0e-3,
-        weight_decay=1.0e-4,
-    ),
-    build_data_pipeline=None,
-    build_model_component=build_model_component,
-    build_loss_stack=None,
-    build_optimizer_component=None,
-    switches={"logging": True, "visualization": True},
 )
-
-EXPERIMENT.feature_schema = build_default_feature_schema(EXPERIMENT.data, EXPERIMENT.model)
 ```
 
-这里的关键点是：
+关键字段：
 
-- `build_model_component` 始终由实验包自己提供
-- `build_data_pipeline=None` 会走框架默认 KJT / sparse pipeline
-- `build_loss_stack=None` 会走默认 ranking loss
-- `build_optimizer_component=None` 会走默认 optimizer builder
+- `name` -- 唯一标识，通常加 `pcvr_` 前缀
+- `model_class_name` -- 必须与 `model.py` 中的类名完全一致
+- `train_defaults` -- `PCVRTrainConfig` 实例，定义默认超参数
 
-## 第 2 步：实现 `model.py`
+## model.py
+
+实现模型类，继承 `EmbeddingParameterMixin`：
 
 ```python
-from __future__ import annotations
-
 import torch
-from torch import nn
+import torch.nn as nn
+from taac2026.infrastructure.pcvr.modeling import (
+    EmbeddingParameterMixin,
+    FeatureEmbeddingBank,
+    NonSequentialTokenizer,
+    SequenceTokenizer,
+    DenseTokenProjector,
+)
+from taac2026.infrastructure.pcvr.protocol import ModelInput
 
-from taac2026.domain.features import build_default_feature_schema
-from taac2026.domain.types import BatchTensors
-from taac2026.infrastructure.nn.embedding import TorchRecEmbeddingBagAdapter
-from taac2026.infrastructure.nn.heads import ClassificationHead
-from taac2026.infrastructure.nn.pooling import masked_mean
 
-
-class MyExperimentModel(nn.Module):
-    def __init__(self, data_config, model_config, dense_dim: int, feature_schema) -> None:
+class MyModel(EmbeddingParameterMixin, nn.Module):
+    def __init__(
+        self,
+        user_int_feature_specs,
+        item_int_feature_specs,
+        user_dense_dim,
+        item_dense_dim,
+        seq_vocab_sizes,
+        user_ns_groups,
+        item_ns_groups,
+        d_model=64,
+        emb_dim=64,
+        num_blocks=2,
+        num_heads=4,
+        # ... 其他参数
+    ):
         super().__init__()
-        self.sparse_embedding = TorchRecEmbeddingBagAdapter(
-            feature_schema,
-            table_names=("user_tokens", "candidate_tokens", "context_tokens"),
-        )
-        self.encoder = nn.Linear(self.sparse_embedding.output_dim + dense_dim, model_config.hidden_dim)
-        self.output = ClassificationHead(model_config.hidden_dim)
+        # 初始化 Embedding、编码器、预测头等
 
-    def forward(self, batch: BatchTensors) -> torch.Tensor:
-        sparse = self.sparse_embedding(batch.sparse_features)
-        fused = torch.cat([sparse, batch.dense_features], dim=-1)
-        hidden = torch.relu(self.encoder(fused))
-        return self.output(hidden)
+    def forward(self, inputs: ModelInput) -> torch.Tensor:
+        # 返回 (B,) 的 logits
+        ...
 
+    def predict(self, inputs: ModelInput):
+        # 返回 (logits, embeddings)
+        logits = self.forward(inputs)
+        embeddings = self._get_embeddings(inputs)
+        return logits, embeddings
 
-def build_model_component(data_config, model_config, dense_dim):
-    feature_schema = build_default_feature_schema(data_config, model_config)
-    return MyExperimentModel(data_config, model_config, dense_dim, feature_schema=feature_schema)
+    def reinit_high_cardinality_params(self):
+        # 重初始化高基数 Embedding
+        ...
 ```
 
-实际模型通常会：
+## ns_groups.json
 
-- 消费 `batch.sparse_features`
-- 按需读取 `batch.sequence_features`
-- 使用共享的 `ClassificationHead`、`TargetAwarePool`、`RMSNorm` 等组件
+JSON 格式的 NS 特征分组：
 
-如果你需要从 schema 选择特定表，优先从 `EXPERIMENT.feature_schema` 派生，而不是重新手写一套 token 约定。
-
-## 何时创建 `data.py`
-
-只有在以下情况才建议覆盖默认数据管道：
-
-- 需要与默认 `FeatureSchema` 不兼容的输入表示
-- 需要额外的自定义样本级变换
-- 需要特殊的 collate / sampler 行为
-
-覆盖时，函数签名仍然必须返回：
-
-```python
-def build_data_pipeline(data_config, model_config, train_config):
-    return train_loader, val_loader, data_stats
+```json
+{
+  "user_ns_groups": {
+    "U1": [1, 15],
+    "U2": [48, 49, 89, 90, 91],
+    "U3": [80]
+  },
+  "item_ns_groups": {
+    "I1": [11, 13],
+    "I2": [5, 6, 7, 8, 12]
+  }
+}
 ```
 
-## 何时创建 `utils.py`
+特征 ID 是列名的数字后缀（`user_int_feats_1` -> fid 1）。
 
-以下情况适合保留自定义 `utils.py`：
-
-- 需要自定义 auxiliary loss
-- 需要特殊优化器分组或非默认优化器
-- 需要对特定参数应用不同更新规则
-
-当前仓库里的真实例子：
-
-- DeepContextNet：保留自定义 optimizer builder
-- UniRec：保留自定义 optimizer builder
-- UniScaleFormer：保留自定义 loss builder
-
-!!! important "不要跨实验包复用 utils"
-    如果实验包需要自定义 builder，应当在自己的 `utils.py` 中显式定义或重新导出。测试会校验 builder 的模块归属，避免不同实验包之间出现隐式耦合。
-
-## 验证流程
+## 本地验证
 
 ```bash
-# 1. 检查 ExperimentSpec / 默认 builder / 前向契约
-uv run pytest tests/integration/test_experiment_packages.py -q
+# 1. 发现实验包
+uv run python -c "from taac2026.infrastructure.experiments.discovery import discover_experiment_paths; print([p.name for p in discover_experiment_paths()])"
 
-# 2. 跑一次最小训练
-uv run taac-train --experiment config/my_experiment
+# 2. 加载实验包
+uv run python -c "from taac2026.infrastructure.experiments.loader import load_experiment_package; exp = load_experiment_package('config/my_experiment'); print(exp.name)"
 
-# 3. 跑一次评估
-uv run taac-evaluate single --experiment config/my_experiment
+# 3. 训练 Smoke Test
+uv run taac-train \
+  --experiment config/my_experiment \
+  --dataset-path data/sample_1000_raw/demo_1000.parquet \
+  --schema-path data/sample_1000_raw/schema.json \
+  --max-epochs 1
+
+# 4. 运行单元测试
+uv run pytest tests/unit/test_experiment_packages.py -v
 ```
 
-如果你新增了测试文件，把它放进 `tests/unit/`、`tests/integration/`、`tests/gpu/`，或 benchmark 对应的 `tests/benchmarks/cpu/`、`tests/benchmarks/gpu/` 目录；未分类测试如果留在 `tests/` 根目录，pytest 收集会直接失败。
+## 修改现有包的检查清单
 
-## 数据与 schema 约定
-
-默认数据集标识为 HuggingFace 数据集名：
-
-```
-TAAC2026/data_sample_1000
-```
-
-你仍然可以在实验包里显式覆盖 `dataset_path`（本地 parquet、本地目录或自定义 Hub 数据集名）。
-默认值在缓存缺失时会自动触发下载并写入本地 HuggingFace 缓存。
-
-`feature_schema` 建议通过 `build_default_feature_schema()` 派生，再根据实验需求做局部调整，而不是从零复制整套表定义。
+- [ ] `model_class_name` 与 `model.py` 中的类名一致
+- [ ] `ns_groups.json` 中的特征 ID 在 schema 范围内
+- [ ] `forward()` 返回 `(B,)` 形状的 logits
+- [ ] `predict()` 返回 `(logits, embeddings)` 元组
+- [ ] `get_sparse_params()` 和 `get_dense_params()` 正确分类参数
+- [ ] 训练 Smoke Test 通过（1 epoch）
+- [ ] 单元测试通过

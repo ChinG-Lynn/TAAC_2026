@@ -6,190 +6,214 @@ icon: lucide/blocks
 
 ## 工程结构
 
-```
-TAAC_2026/
-├── src/taac2026/          # 共享框架（不含具体模型实现）
-│   ├── domain/            # 领域模型：配置、指标、运行时
-│   ├── application/       # 应用层：训练、评估、搜索、报告 CLI
-│   └── infrastructure/    # 基础设施：实验加载、数据集解析、GPU 调度
-├── config/                # 目录式实验包（每个包独立）
-├── tests/                 # 测试套件
-├── docs/                  # 文档
-└── outputs/               # 训练输出产物（git 忽略）
-```
-
-## 核心抽象
-
-### ExperimentSpec
-
-## 工程结构
+项目采用三层领域驱动设计：
 
 ```
-TAAC_2026/
-├── src/taac2026/domain/            # 配置、ExperimentSpec、FeatureSchema、BatchTensors
-├── src/taac2026/application/       # 训练、评估、搜索、报告 CLI 与服务层
-├── src/taac2026/infrastructure/    # 数据管道、TorchRec 适配器、共享 nn 组件、实验加载
-├── config/                         # 10 个目录式实验包
-├── tests/                          # 单元 / 集成 / GPU 测试
-├── docs/                           # 文档站点
-└── outputs/                        # 训练与评估产物（git 忽略）
+src/taac2026/
+├── domain/                 # 纯业务逻辑（无 PyTorch 依赖）
+│   ├── config.py           # TrainRequest / EvalRequest / InferRequest
+│   ├── experiment.py       # ExperimentSpec / TrainFn / EvalFn / InferFn
+│   └── metrics.py          # AUC / LogLoss / GAUC / Bootstrap CI
+├── application/            # CLI 入口
+│   ├── training/cli.py     # taac-train
+│   ├── evaluation/cli.py   # taac-evaluate
+│   ├── search/cli.py       # taac-search
+│   ├── maintenance/        # taac-package-*, taac-clean-*
+│   └── reporting/          # taac-plot-*, taac-dataset-eda
+└── infrastructure/         # 数据加载、训练、模型构建
+    ├── checkpoints.py      # Checkpoint 解析与保存
+    ├── experiments/        # 实验包发现与加载
+    ├── io/                 # 文件工具
+    └── pcvr/               # PCVR 核心框架
+        ├── config.py       # PCVRTrainConfig 层级配置
+        ├── data.py         # PCVRParquetDataset
+        ├── data_pipeline.py# 增强管道
+        ├── experiment.py   # PCVRExperiment 适配器
+        ├── modeling.py     # 可复用构建块
+        ├── protocol.py     # ModelInput / build_pcvr_model
+        ├── trainer.py      # PCVRPointwiseTrainer
+        └── training.py     # train_pcvr_model / parse_pcvr_train_args
 ```
 
-## ExperimentSpec 合约
+实验包独立于框架之外：
 
-当前框架遵循“默认实现 + Callable 逃生口”的模式。实验包仍然保留完整自由度，但大多数包已经不再需要自写 data / loss / optimizer builder。
+```
+config/
+├── baseline/
+│   ├── __init__.py         # EXPERIMENT = PCVRExperiment(...)
+│   ├── model.py            # 模型实现
+│   └── ns_groups.json      # NS 特征分组
+├── symbiosis/
+├── ctr_baseline/
+├── deepcontextnet/
+├── hyformer/
+├── interformer/
+├── onetrans/
+├── unirec/
+└── uniscaleformer/
+```
+
+## 运行入口
+
+12 个 CLI 命令通过 `pyproject.toml` 注册。核心命令：
+
+| 命令            | 模块                                       |
+| --------------- | ------------------------------------------ |
+| `taac-train`    | `taac2026.application.training.cli:main`   |
+| `taac-evaluate` | `taac2026.application.evaluation.cli:main` |
+| `taac-search`   | `taac2026.application.search.cli:main`     |
+
+`taac-evaluate` 有两个子命令：
+
+- `single` -- 评估有标签数据，输出 AUC 等指标
+- `infer` -- 推理无标签数据，输出 `predictions.json`
+
+`run.sh` 是 shell 层包装，映射 `train` / `val` / `infer` / `package` 到对应 CLI 命令，并支持 Bundle 模式（检测 `code_package.zip` 自动解压安装）。
+
+## 实验包契约
+
+每个实验包目录必须包含：
+
+| 文件             | 要求                                                                                    |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| `__init__.py`    | 定义 `EXPERIMENT = PCVRExperiment(name, package_dir, model_class_name, train_defaults)` |
+| `model.py`       | 实现模型类，必须暴露与 `model_class_name` 同名的类                                      |
+| `ns_groups.json` | JSON 格式的 NS 特征分组                                                                 |
+
+`PCVRExperiment` 提供三个方法：
+
+- `train(TrainRequest)` -- 启动训练
+- `evaluate(EvalRequest)` -- 运行评估
+- `infer(InferRequest)` -- 运行推理
+
+加载机制：`load_experiment_package(value)` 通过 `sys.path` 临时修改加载实验目录中的 `model.py` 模块。
+
+## 模型输入与构建
+
+所有 PCVR 模型接收统一的 `ModelInput` NamedTuple：
 
 ```python
-@dataclass(slots=True)
-class ExperimentSpec:
-    name: str
-    data: DataConfig
-    model: ModelConfig
-    train: TrainConfig
-
-    feature_schema: FeatureSchema | None = None
-
-    build_data_pipeline: Callable | None = None
-    build_model_component: Callable = ...
-    build_loss_stack: Callable | None = None
-    build_optimizer_component: Callable | None = None
-
-    switches: dict[str, bool] = field(default_factory=dict)
-    search: SearchConfig = field(default_factory=SearchConfig)
-    build_search_experiment: Callable | None = None
+class ModelInput(NamedTuple):
+    user_int_feats:       Tensor   # (B, num_user_int)
+    item_int_feats:       Tensor   # (B, num_item_int)
+    user_dense_feats:     Tensor   # (B, user_dense_dim)
+    item_dense_feats:     Tensor   # (B, item_dense_dim)
+    seq_data:             dict[str, Tensor]  # domain -> (B, num_features, max_seq_len)
+    seq_lens:             dict[str, Tensor]  # domain -> (B,)
+    seq_time_buckets:     dict[str, Tensor]  # domain -> (B, max_seq_len)
 ```
 
-框架入口会通过 `resolve_experiment_builders()` 把 `None` builder 自动解析到共享默认实现：
+`build_pcvr_model()` 根据 schema 和配置自动构建模型，负责：
 
-- 数据管道：`default_build_data_pipeline()`
-- 损失：`default_build_loss_stack()`
-- 优化器：`default_build_optimizer()`
+1. 解析 `schema.json` 生成 `user_int_feature_specs` / `item_int_feature_specs`
+2. 加载 `ns_groups.json` 生成 `user_ns_groups` / `item_ns_groups`
+3. 实例化实验包中的模型类，传入所有规格参数
 
-这让 baseline、ctr_baseline、grok、hyformer、interformer、onetrans、oo、uniscaleformer 都可以只保留模型核心代码；目前仍显式自定义 optimizer builder 的实验包是 DeepContextNet 和 UniRec。
+模型必须实现的方法：
 
-## 数据流
+| 方法                             | 签名                                                      |
+| -------------------------------- | --------------------------------------------------------- |
+| `forward`                        | `(ModelInput) -> logits`                                  |
+| `predict`                        | `(ModelInput) -> (logits, embeddings)`                    |
+| `get_sparse_params`              | `() -> list[Parameter]`（来自 `EmbeddingParameterMixin`） |
+| `get_dense_params`               | `() -> list[Parameter]`（来自 `EmbeddingParameterMixin`） |
+| `reinit_high_cardinality_params` | `() -> None`                                              |
 
-```mermaid
-graph TD
-    A[原始 parquet / HuggingFace rows] --> B[default_data_pipeline]
-    B --> C[FeatureSchema]
-    B --> D[BatchTensors]
-    D --> E[sparse_features<br/>KeyedJaggedTensor]
-    D --> F[sequence_features<br/>KeyedJaggedTensor]
-    D --> G[dense_features<br/>torch.Tensor]
-    E --> H[TorchRecEmbeddingBagAdapter]
-    F --> I[模型内部序列编码]
-    G --> J[特征拼接 / 交互]
-    H --> J
-    I --> J
-    J --> K[共享 pooling / heads / norms]
-    K --> L[logits]
+## NS Groups
+
+NS（Non-Sequential）Groups 将非序列特征 ID 映射到语义分组，供 NS Tokenizer 使用。
+
+`ns_groups.json` 格式：
+
+```json
+{
+  "user_ns_groups": {
+    "U1": [1, 15],
+    "U2": [48, 49, 89, 90, 91]
+  },
+  "item_ns_groups": {
+    "I1": [11, 13],
+    "I2": [5, 6, 7, 8, 12]
+  }
+}
 ```
 
-### BatchTensors
+特征 ID 是列名的数字后缀（`user_int_feats_1` -> fid 1）。
 
-当前 `BatchTensors` 已经从旧的“多组 padded token + mask”表示迁移到更统一的批处理结构：
+两种 NS Tokenizer：
 
-- `sparse_features`：所有候选 / 用户 / 上下文等稀疏 token 特征
-- `sequence_features`：行为序列特征
-- `dense_features`：稠密数值特征
-- `labels`、`user_indices`、`item_indices`、`item_logq`
-- `metadata`：仅用于评估与产物导出的样本级标识信息（如 `sample_index` / `user_id` / `item_id` / `timestamp` / `raw_label`），不会进入模型 pytree
+- **`group`**（`GroupNSTokenizer`）-- 每组一个 token，取组内 Embedding 均值
+- **`rankmixer`**（`RankMixerNSTokenizer`）-- 全部 Embedding 拼接后分组投影，参数更多但表达力更强
 
-其中稀疏与序列特征都可以直接映射到 TorchRec 的 `KeyedJaggedTensor` 路径。
+## 训练流程
 
-## 共享基础设施
+`PCVRPointwiseTrainer` 驱动训练循环：
 
-### 特征与数据管道
+1. **双优化器** -- Adagrad 处理稀疏（Embedding）参数，AdamW 处理稠密参数
+2. **AMP** -- 可选混合精度训练，支持 `bfloat16` / `float16`
+3. **`torch.compile`** -- 可选 JIT 编译加速
+4. **Early Stopping** -- 基于验证集 AUC
+5. **Checkpoint** -- 保存 `model.pt` + 侧车文件（`schema.json`、`ns_groups.json`、`train_config.json`）
+6. **高基数 Embedding 重初始化** -- 每个 epoch 后重初始化低频特征的 Embedding
 
-- `FeatureSchema` 统一声明表名、family、embedding 维度、pooling 策略与序列属性
-- `default_data_pipeline` 负责从 parquet/HF 行构建 `BatchTensors`
-- `sparse_collate` 负责把 masked dense batch 转成 `KeyedJaggedTensor`
+损失函数（在 `infrastructure/training/runtime.py`）：
 
-### 嵌入层
+- `compute_binary_classification_loss()` -- 支持 BCE、Focal Loss、Pairwise AUC Loss
+- `sigmoid_focal_loss()` -- 处理类别不平衡
+- `binary_pairwise_auc_loss()` -- 直接优化 AUC 排序
 
-- `TorchRecEmbeddingBagAdapter` 封装 `EmbeddingBagCollection`
-- 实验包不再直接管理 `nn.Embedding`
-- 稀疏特征按 schema 选择表并输出拼接后的 pooled embedding
+## 评估与推理
 
-### 共享神经网络组件
+**评估**（`taac-evaluate single`）：
 
-当前已经稳定共享的组件：
+- 加载 Checkpoint，遍历验证集，计算 AUC / LogLoss / Brier / GAUC / Bootstrap CI
+- 输出指标 JSON 和可选的逐样本预测
 
-- `pooling.py`：`masked_mean`、`MaskedMeanPool`、`TargetAwarePool`
-- `heads.py`：`ClassificationHead`
-- `norms.py`：`rms_norm()`、`RMSNorm`
-- `optimizers.py`：`Muon`、`CombinedOptimizer`、`build_hybrid_optimizer()`
-- `transformer.py`：`TaacTransformerBlock`、`TaacCrossAttentionBlock`
-- `hstu.py`：`HSTUBlock`、`TimeAwareHSTU`、`BranchTransducer`、`MixtureOfTransducers`、`BlockAttnRes`、时间偏置 / RoPE helper
-- `quantization.py`：评估侧动态 int8 量化入口（torchao `nn.Linear` 主路径；TorchRec `EmbeddingBagCollection` 显式不支持 int8）
-- `triton_norm.py`：首个 Triton RMSNorm kernel 与测试支架
+**推理**（`taac-evaluate infer`）：
 
-这些组件已经覆盖了主干里的共享注意力、RMSNorm、HSTU 与混合优化器路径；当前未完成的重点收尾转为 fp8 kernel，以及基于 benchmark 的最终验收报告。
+- 加载 Checkpoint，遍历无标签数据
+- 输出 `predictions.json`：`{"predictions": {user_id: score}}`
 
-## 训练与评估流程
+指标计算（`domain/metrics.py`）：
 
-```mermaid
-graph TD
-    A[加载 EXPERIMENT] --> B[resolve_experiment_builders]
-    B --> C[build_data_pipeline]
-    B --> D[build_model_component]
-    B --> E[build_loss_stack]
-    B --> F[build_optimizer_component]
-    D --> G[runtime optimization<br/>torch.compile / AMP]
-    C --> H[train/val loaders + DataStats]
-    H --> I[epoch loop]
-    E --> I
-    F --> I
-    G --> I
-    I --> J[best.pt / summary.json / validation_predictions.jsonl / training_curves.json / profiling]
+- `binary_auc` / `binary_logloss` / `binary_score_diagnostics`
+- `binary_auc_bootstrap_ci` -- Bootstrap 置信区间
+- `group_auc` -- 按用户分组的 GAUC
+
+## 线上打包
+
+**训练 Bundle**（`taac-package-train`）：
+
+```
+run.sh                    # 自动检测 Bundle / 本地模式
+code_package.zip
+├── .taac_training_manifest.json
+├── pyproject.toml + uv.lock
+├── src/taac2026/
+├── config/<experiment>/
+└── tools/
 ```
 
-训练服务会统一处理：
+**推理 Bundle**（`taac-package-infer`）：
 
-- `torch.compile` 与 AMP 选项
-- 训练 / 验证循环
-- checkpoint 与 profiling 产物落盘
-- Optuna search 过程中对 ExperimentSpec 的派生与覆写
+```
+infer.py                  # 自解压 + 安装 + 推理脚本
+code_package.zip
+├── .taac_inference_manifest.json
+├── pyproject.toml + uv.lock
+├── src/taac2026/
+├── config/<experiment>/
+└── <checkpoint>/
+```
 
-评估 CLI 复用相同的实验包定义，并支持在 `single` / `batch` 模式下额外打开编译、AMP、CPU 动态 int8 量化，以及 `torch.export` 评估图导出。
+环境变量：`EVAL_DATA_PATH`、`EVAL_RESULT_PATH`、`MODEL_OUTPUT_PATH`、`TAAC_SCHEMA_PATH`。
 
-## 配置对象
-
-核心配置分为四个 dataclass：
-
-- `DataConfig`：数据集路径、序列长度、dense 维度、切分比例等
-- `ModelConfig`：embedding / hidden 维度、层数、头数、各种子结构参数
-- `TrainConfig`：epochs、batch size、学习率、AMP、compile、输出目录
-- `SearchConfig`：Optuna trial 数、时间预算、参数量限制，以及可选的模型单样本前向计算量预算
-
-这些配置既用于训练 / 评估，也用于测试里的最小实验包构造。
-
-## 指标与输出产物
-
-共享指标实现位于 `src/taac2026/domain/metrics.py`，当前评估报告会输出：
-
-- AUC
-- PR-AUC
-- Brier Score
-- LogLoss
-- GAUC
-- mean / p95 latency
-
-标准运行目录会包含：
-
-- `best.pt`
-- `summary.json`
-- `validation_predictions.jsonl`
-- `training_curves.json`
-- `profiling/`
+详见 [线上 Bundle 上传指南](guide/online-training-bundle.md)。
 
 ## 当前边界
 
-当前仓库已经完成 TorchRec 稀疏特征、默认 builder、共享 HSTU 原语和 GPU CI 收口，但仍未完成以下计划项：
-
-- Triton attention / FFN 的 fp8 路径
-- Muon 的 Triton 化矩阵投影
-- 基于 benchmark 的最终 AUC / 时延验收报告
-
-文档中的架构描述以已经合并到仓库的实现为准，而不是以重构计划中的目标态为准。
+- 仅支持 PCVR 二分类任务（AUC 优化）
+- Parquet 列式数据格式，120 列固定 Schema
+- 序列域固定为 4 个（a, b, c, d）
+- 模型接口为 `ModelInput -> logits`，不支持多任务
+- NS Groups 为静态分组，不支持动态特征选择
